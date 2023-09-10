@@ -1,3 +1,4 @@
+import sys
 from http import HTTPStatus
 import logging
 import os
@@ -5,24 +6,7 @@ import requests
 import time
 from telegram import Bot
 from dotenv import load_dotenv
-
-
-class HTTPRequestError(Exception):
-    """Ошибка статуса запроса."""
-
-    pass
-
-
-class SendMessageError(Exception):
-    """Ошибка отправки сообщения."""
-
-    pass
-
-
-class CheckTokenError(Exception):
-    """ошибка переменной."""
-
-    pass
+from errors import HTTPRequestError, SendMessageError
 
 
 load_dotenv()
@@ -40,7 +24,7 @@ TELEGRAM_TOKEN = os.getenv('Token')
 TELEGRAM_CHAT_ID = 5766924512
 
 RETRY_PERIOD = 600
-ENDPOINT = 'https://practicum.yandex.ru/api/user_api/homework_statuses/'
+ENDPOINT = None
 HEADERS = {'Authorization': f'OAuth {PRACTICUM_TOKEN}'}
 
 
@@ -53,15 +37,17 @@ HOMEWORK_VERDICTS = {
 
 def check_tokens():
     """Проверяет доступность переменных окружения."""
-    constante_dict = {PRACTICUM_TOKEN: 'котстанта токена для Яндекс Практикума',
-                      TELEGRAM_TOKEN: 'константа токена для Telegram',
-                      TELEGRAM_CHAT_ID: 'константа chat id',
-                      RETRY_PERIOD: 'константа повторного пориода',
-                      ENDPOINT: 'ENDPOINT'}
+    constante_dict = {
+        PRACTICUM_TOKEN: 'котстанта токена для Яндекс Практикума',
+        TELEGRAM_TOKEN: 'константа токена для Telegram',
+        TELEGRAM_CHAT_ID: 'константа chat id',
+        RETRY_PERIOD: 'константа повторного пориода',
+        ENDPOINT: 'ENDPOINT'
+    }
     for key, value in constante_dict.items():
-        if not key:
+        if key is None:
             logging.critical(f'Ошибка: {value} не найдена.')
-            raise CheckTokenError
+            sys.exit(1)
 
 
 def get_api_answer(timestamp):
@@ -112,7 +98,7 @@ def parse_status(homework):
 def send_message(bot, message):
     """Отправляет в telegram сообщение."""
     try:
-        bot.sendMessage(TELEGRAM_CHAT_ID, message)
+        bot.send_message(TELEGRAM_CHAT_ID, message)
         logging.debug('Сообщение о смене статуса отправлено.')
     except SendMessageError as e:
         logging.error(f'Ошибка {e} в отправке сообщения.')
@@ -121,12 +107,12 @@ def send_message(bot, message):
 
 def main():
     """Основная логика работы бота."""
-    bot = Bot(token=TELEGRAM_TOKEN)
-    timestamp = int(time.time() - RETRY_PERIOD)
     while True:
         try:
             # Проверяет доступность переменных окружения.
             check_tokens()
+            bot = Bot(token=TELEGRAM_TOKEN)
+            timestamp = int(time.time() - RETRY_PERIOD - 900_000)
             # Сохраняем ответ от эндпоинта.
             api_answer = get_api_answer(timestamp)
             # Проверяем ответ на соответствие документации.
