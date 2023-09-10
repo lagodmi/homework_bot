@@ -1,10 +1,28 @@
+from http import HTTPStatus
 import logging
 import os
 import requests
-import schedule
 import time
 from telegram import Bot
 from dotenv import load_dotenv
+
+
+class HTTPRequestError(Exception):
+    """Ошибка статуса запроса."""
+
+    pass
+
+
+class SendMessageError(Exception):
+    """Ошибка отправки сообщения."""
+
+    pass
+
+
+class CheckTokenError(Exception):
+    """ошибка переменной."""
+
+    pass
 
 
 load_dotenv()
@@ -35,14 +53,15 @@ HOMEWORK_VERDICTS = {
 
 def check_tokens():
     """Проверяет доступность переменных окружения."""
-    if not PRACTICUM_TOKEN:
-        logging.critical(
-            'Ошибка: токен для Яндекс Практикума не найден.'
-        )
-    if not TELEGRAM_TOKEN:
-        logging.critical(
-            'Ошибка: токен для Telegram не найден.'
-        )
+    constante_dict = {PRACTICUM_TOKEN: 'котстанта токена для Яндекс Практикума',
+                      TELEGRAM_TOKEN: 'константа токена для Telegram',
+                      TELEGRAM_CHAT_ID: 'константа chat id',
+                      RETRY_PERIOD: 'константа повторного пориода',
+                      ENDPOINT: 'ENDPOINT'}
+    for key, value in constante_dict.items():
+        if not key:
+            logging.critical(f'Ошибка: {value} не найдена.')
+            raise CheckTokenError
 
 
 def get_api_answer(timestamp):
@@ -53,25 +72,40 @@ def get_api_answer(timestamp):
             headers=HEADERS,
             params={'from_date': timestamp}
         )
-    except Exception:
-        logging.error('Ошибка при запросе к API.')
+        if response.status_code != HTTPStatus.OK:
+            logging.error('Ошибка код статуса не 200')
+            raise HTTPRequestError
+    except requests.RequestException as e:
+        logging.error('Ошибка при запросе к API: %s', str(e))
     return response.json()
 
 
 def check_response(response):
     """Проверяет ответ API на соответствие документации."""
-    if not response['homeworks']:
-        logging.debug('API не соответствует.')
+    try:
+        homework = response.get('homeworks')
+        if not isinstance(homework, list):
+            logging.error('Тип данных ответа API не соответствует ожиданию.')
+            raise TypeError
+    except Exception:
+        logging.error('API не соответствует.')
+        raise TypeError
+    return homework
 
 
 def parse_status(homework):
     """Извлекаем статус из ответа с Практикума."""
     try:
-        homework_name = homework['homeworks'][0]['homework_name'][9:-4]
-        status = homework['homeworks'][0]['status']
-    except Exception:
-        logging.error('Отсутствие ожидаемых ключей в ответе API.')
-    verdict = HOMEWORK_VERDICTS[status]
+        isinstance(homework, dict)
+        homework_name = homework['homework_name']
+        status = homework['status']
+        verdict = HOMEWORK_VERDICTS[status]
+    except KeyError as e:
+        logging.error(f'Отсутствует ключ {e} в ответе API.')
+        raise KeyError
+    except TypeError:
+        logging.error('Некорректный формат ответа API.')
+        raise TypeError
     return f'Изменился статус проверки работы "{homework_name}". {verdict}'
 
 
@@ -80,35 +114,33 @@ def send_message(bot, message):
     try:
         bot.sendMessage(TELEGRAM_CHAT_ID, message)
         logging.debug('Сообщение о смене статуса отправлено.')
-    except Exception:
-        logging.error('Ошибка в отправке сообщения.')
+    except SendMessageError as e:
+        logging.error(f'Ошибка {e} в отправке сообщения.')
+        raise SendMessageError
 
 
 def main():
     """Основная логика работы бота."""
     bot = Bot(token=TELEGRAM_TOKEN)
-    timestamp = int(time.time()) - 600000
-    try:
-        # Проверяет доступность переменных окружения.
-        check_tokens()
-        # Сохраняем ответ от эндпоинта.
-        answer = get_api_answer(timestamp)
-        # Проверяем ответ на соответствие документации.
-        check_response(answer)
-        # Формируем сообщение.
-        message = parse_status(answer)
-        # Отправляем сообщение.
-        send_message(bot, message)
-    except Exception as error:
-        message = f'Сбой в работе программы: {error}'
-        # Отправляем сообщение.
-        send_message(bot, message)
+    timestamp = int(time.time() - RETRY_PERIOD)
+    while True:
+        try:
+            # Проверяет доступность переменных окружения.
+            check_tokens()
+            # Сохраняем ответ от эндпоинта.
+            api_answer = get_api_answer(timestamp)
+            # Проверяем ответ на соответствие документации.
+            answer = check_response(api_answer)
+            # Формируем сообщение.
+            message = parse_status(answer[0])
+            # Отправляем сообщение.
+            send_message(bot, message)
+        except Exception as error:
+            message = f'Сбой в работе программы: {error}'
+            # Отправляем сообщение.
+            logging.error(message)
+        time.sleep(RETRY_PERIOD)
 
 
 if __name__ == '__main__':
-    # Запуск функции каждые 10 минут
-    schedule.every(1).minutes.do(main)
-    # Бесконечный цикл для выполнения расписания
-    while True:
-        schedule.run_pending()
-        time.sleep(1)
+    main()
