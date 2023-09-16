@@ -44,7 +44,6 @@ DURATION_IN_SECONDS = 600
 RETRY_PERIOD = DURATION_IN_SECONDS
 ENDPOINT = 'https://practicum.yandex.ru/api/user_api/homework_statuses/'
 HEADERS = {'Authorization': f'OAuth {PRACTICUM_TOKEN}'}
-TIME = 0
 
 HOMEWORK_VERDICTS = {
     'approved': 'Работа проверена: ревьюеру всё понравилось. Ура!',
@@ -86,15 +85,12 @@ def get_api_answer(timestamp):
 
 def check_response(response):
     """Проверяет ответ API на соответствие документации."""
-    global TIME
     try:
-        TIME = response.get('current_date')
         homework = response.get('homeworks')
     except Exception:
         raise TypeError
     if not isinstance(homework, list):
         raise TypeError
-    print(TIME)
     return homework
 
 
