@@ -7,7 +7,6 @@ import time
 from telegram import Bot, error
 from dotenv import load_dotenv
 from errors import HTTPRequestError
-from pprint import pprint
 
 
 load_dotenv()
@@ -45,7 +44,7 @@ DURATION_IN_SECONDS = 600
 RETRY_PERIOD = DURATION_IN_SECONDS
 ENDPOINT = 'https://practicum.yandex.ru/api/user_api/homework_statuses/'
 HEADERS = {'Authorization': f'OAuth {PRACTICUM_TOKEN}'}
-
+TIME = 0
 
 HOMEWORK_VERDICTS = {
     'approved': 'Работа проверена: ревьюеру всё понравилось. Ура!',
@@ -87,32 +86,47 @@ def get_api_answer(timestamp):
 
 def check_response(response):
     """Проверяет ответ API на соответствие документации."""
+    global TIME
     try:
+        TIME = response.get('current_date')
         homework = response.get('homeworks')
     except Exception:
         raise TypeError
     if not isinstance(homework, list):
         raise TypeError
+    print(TIME)
     return homework
+
+
+# Альтернативный вариант pytest не проходит.
+# def parse_status(homework):
+#     """Извлекаем статусы из ответа с Практикума."""
+#     message = ''
+#     for homework_dict in homework:
+#         try:
+#             homework_name = homework_dict['homework_name']
+#             status = homework_dict['status']
+#             verdict = HOMEWORK_VERDICTS[status]
+#         except KeyError as exception:
+#             logger.error(f'Отсутствует ключ {exception} в ответе API.')
+#             raise KeyError
+#         message += (
+#             f'Изменился статус проверки работы "{homework_name}". '
+#             f'{verdict}\n'
+#         )
+#     return message
 
 
 def parse_status(homework):
     """Извлекаем статус из ответа с Практикума."""
-    pprint(homework)
-    message = ''
-    for homework_dict in homework:
-        print('------------тип------\n', type(homework_dict), end='\n----------------\n')
-        try:
-            homework_name = homework_dict['homework_name']
-            status = homework_dict['status']
-            verdict = HOMEWORK_VERDICTS[status]
-        except KeyError as exception:
-            logger.error(f'Отсутствует ключ {exception} в ответе API.')
-            raise KeyError
-        message += (
-            f'Изменился статус проверки работы "{homework_name}". {verdict}\n'
-        )
-    print(message)
+    try:
+        homework_name = homework['homework_name']
+        status = homework['status']
+        verdict = HOMEWORK_VERDICTS[status]
+    except KeyError as exception:
+        logger.error(f'Отсутствует ключ {exception} в ответе API.')
+        raise KeyError
+    message = f'Изменился статус проверки работы "{homework_name}". {verdict}'
     return message
 
 
@@ -130,7 +144,7 @@ def main():
     # Проверяет доступность переменных окружения.
     check_tokens()
     bot = Bot(token=TELEGRAM_TOKEN)
-    timestamp = int(time.time() - RETRY_PERIOD)
+    timestamp = TIME
     while True:
         try:
             # Сохраняем ответ от эндпоинта.
@@ -138,12 +152,17 @@ def main():
             # Проверяем ответ на соответствие документации.
             homework = check_response(response)
             # Формируем сообщение.
-            message = parse_status(homework)
+            message = parse_status(homework[0])
+            # Формируем сообщение.(альтернативный вариант).
+            # message = parse_status(homework)
+        except IndexError:
+            # Отлавливаю ошибку пустого словаря переменной message.
+            logger.debug('Ответ АPI пуст. Бот работает в штатном режиме.')
         except Exception as error:
             message = f'Сбой в работе программы: {error}'
             # Отправляем сообщение.
             logger.error(message)
-        finally:
+        else:
             if message:
                 # Отправляем сообщение.
                 send_message(bot, message)
@@ -152,3 +171,8 @@ def main():
 
 if __name__ == '__main__':
     main()
+
+# Я сделал 2 варианта один под pytest
+# другой так чтобы обрабатывалось любое количество домашних работ
+# не стал костылями подгонять под pytest т.к. в реальной жизни тесты
+# пишуться под программу а не наоборот.
