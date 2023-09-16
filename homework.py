@@ -144,7 +144,7 @@ def main():
     # Проверяет доступность переменных окружения.
     check_tokens()
     bot = Bot(token=TELEGRAM_TOKEN)
-    timestamp = TIME
+    timestamp = int(time.time() - RETRY_PERIOD)
     while True:
         try:
             # Сохраняем ответ от эндпоинта.
