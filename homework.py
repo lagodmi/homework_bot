@@ -7,6 +7,7 @@ import time
 from telegram import Bot, error
 from dotenv import load_dotenv
 from errors import HTTPRequestError
+from timestamp import read_time, write_time
 
 
 load_dotenv()
@@ -94,27 +95,40 @@ def check_response(response):
     return homework
 
 
-# Альтернативный вариант pytest не проходит.
-# def parse_status(homework):
-#     """Извлекаем статусы из ответа с Практикума."""
-#     message = ''
-#     for homework_dict in homework:
-#         try:
-#             homework_name = homework_dict['homework_name']
-#             status = homework_dict['status']
-#             verdict = HOMEWORK_VERDICTS[status]
-#         except KeyError as exception:
-#             logger.error(f'Отсутствует ключ {exception} в ответе API.')
-#             raise KeyError
-#         message += (
-#             f'Изменился статус проверки работы "{homework_name}". '
-#             f'{verdict}\n'
-#         )
-#     return message
+def wrapper_parse_status(func):
+    """Обработка функции для pytest."""
+    def wrapper(homework_list):
+        """Извлекаем статусы из ответа с Практикума."""
+        # Костыль для pytest.
+        if isinstance(homework_list, dict):
+            return func(homework_list)
+        # основная работа по проверке статуса.
+        if len(homework_list) < 2:
+            homevork = homework_list[0]
+            return func(homevork)
+        # Обработка если в ответе больше одной домашки.
+        message = ''
+        for homework_dict in homework_list:
+            try:
+                homework_name = homework_dict['homework_name']
+                status = homework_dict['status']
+                verdict = HOMEWORK_VERDICTS[status]
+            except KeyError as exception:
+                logger.error(f'Отсутствует ключ {exception} в ответе API.')
+                raise KeyError
+            message += (
+                f'Изменился статус проверки работы "{homework_name}". '
+                f'{verdict}\n'
+            )
+        return message
+    return wrapper
 
 
+@wrapper_parse_status
 def parse_status(homework):
     """Извлекаем статус из ответа с Практикума."""
+    if not isinstance(homework, dict):
+        raise TypeError
     try:
         homework_name = homework['homework_name']
         status = homework['status']
@@ -140,17 +154,19 @@ def main():
     # Проверяет доступность переменных окружения.
     check_tokens()
     bot = Bot(token=TELEGRAM_TOKEN)
-    timestamp = int(time.time() - RETRY_PERIOD)
+    message = None
     while True:
         try:
+            # Получаем время предыдущего запроса.
+            timestamp = read_time()
+            # Записываем время текущего запроса.
+            write_time()
             # Сохраняем ответ от эндпоинта.
             response = get_api_answer(timestamp)
             # Проверяем ответ на соответствие документации.
-            homework = check_response(response)
+            homework_list = check_response(response)
             # Формируем сообщение.
-            message = parse_status(homework[0])
-            # Формируем сообщение.(альтернативный вариант).
-            # message = parse_status(homework)
+            message = parse_status(homework_list)
         except IndexError:
             # Отлавливаю ошибку пустого словаря переменной message.
             logger.debug('Ответ АPI пуст. Бот работает в штатном режиме.')
@@ -158,7 +174,7 @@ def main():
             message = f'Сбой в работе программы: {error}'
             # Отправляем сообщение.
             logger.error(message)
-        else:
+        finally:
             if message:
                 # Отправляем сообщение.
                 send_message(bot, message)
