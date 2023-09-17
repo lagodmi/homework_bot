@@ -6,7 +6,7 @@ import requests
 import time
 from telegram import Bot, error
 from dotenv import load_dotenv
-from errors import HTTPRequestError
+from errors import HTTPRequestError, SendMessageError, RequestException
 from timestamp import read_time, write_time
 
 
@@ -36,6 +36,11 @@ file_handler.setFormatter(formatter)
 # добавляем обработчик к логгеру
 logger.addHandler(file_handler)
 
+# Создаем потоковый обработчик
+stream_handler = logging.StreamHandler()
+
+# Добавляем обработчик к логгеру модуля
+logger.addHandler(stream_handler)
 
 PRACTICUM_TOKEN = os.getenv('practicum_token')
 TELEGRAM_TOKEN = os.getenv('token')
@@ -64,7 +69,7 @@ def check_tokens():
     }
     for key, value in constante_dict.items():
         if key is None:
-            logging.critical(f'Ошибка: {value} не найдена.')
+            logger.critical(f'Ошибка: {value} не найдена.')
             sys.exit(1)
 
 
@@ -77,10 +82,14 @@ def get_api_answer(timestamp):
             params={'from_date': timestamp}
         )
     except requests.RequestException as exception:
-        logger.error('Ошибка при запросе к API: %s', str(exception))
+        raise RequestException('Ошибка при запроса к API: %s', str(exception))
     if response.status_code != HTTPStatus.OK:
-        raise HTTPRequestError
-    logger.debug('Работает исправно')
+        raise HTTPRequestError(
+            'Статус ответа от Практикума не 200.',
+            request_url=response.url,
+            response_code=response.status_code,
+            response_body=response.text
+        )
     return response.json()
 
 
@@ -89,9 +98,9 @@ def check_response(response):
     try:
         homework = response.get('homeworks')
     except Exception:
-        raise TypeError
+        raise TypeError('Ответ API не содержит ключа "homeworks"')
     if not isinstance(homework, list):
-        raise TypeError
+        raise TypeError('Неверный формат списка домашних заданий')
     return homework
 
 
@@ -102,7 +111,7 @@ def wrapper_parse_status(func):
         # Костыль для pytest.
         if isinstance(homework_list, dict):
             return func(homework_list)
-        # основная работа по проверке статуса.
+        # Основная работа по проверке статуса.
         if len(homework_list) < 2:
             homevork = homework_list[0]
             return func(homevork)
@@ -114,8 +123,7 @@ def wrapper_parse_status(func):
                 status = homework_dict['status']
                 verdict = HOMEWORK_VERDICTS[status]
             except KeyError as exception:
-                logger.error(f'Отсутствует ключ {exception} в ответе API.')
-                raise KeyError
+                raise KeyError(f'Отсутствует ключ {exception} в ответе API.')
             message += (
                 f'Изменился статус проверки работы "{homework_name}". '
                 f'{verdict}\n'
@@ -128,14 +136,13 @@ def wrapper_parse_status(func):
 def parse_status(homework):
     """Извлекаем статус из ответа с Практикума."""
     if not isinstance(homework, dict):
-        raise TypeError
+        raise TypeError('Неверный формат домашнего задания')
     try:
         homework_name = homework['homework_name']
         status = homework['status']
         verdict = HOMEWORK_VERDICTS[status]
     except KeyError as exception:
-        logger.error(f'Отсутствует ключ {exception} в ответе API.')
-        raise KeyError
+        raise KeyError(f'Отсутствует ключ {exception} в ответе API.')
     message = f'Изменился статус проверки работы "{homework_name}". {verdict}'
     return message
 
@@ -144,9 +151,10 @@ def send_message(bot, message):
     """Отправляет в telegram сообщение."""
     try:
         bot.send_message(TELEGRAM_CHAT_ID, message)
-    except error.TelegramError:
-        logger.error('Ошибка при отправке сообщения.')
-    logger.debug('Сообщение о смене статуса отправлено.')
+    except error.TelegramError as exception:
+        raise SendMessageError(f'Ошибка отправки сообщения: {exception}')
+    else:
+        logger.debug('Сообщение о смене статуса отправлено.')
 
 
 def main():
@@ -162,9 +170,9 @@ def main():
             # Записываем время текущего запроса.
             write_time()
             # Сохраняем ответ от эндпоинта.
-            response = get_api_answer(timestamp)
+            api_data = get_api_answer(timestamp)
             # Проверяем ответ на соответствие документации.
-            homework_list = check_response(response)
+            homework_list = check_response(api_data)
             # Формируем сообщение.
             message = parse_status(homework_list)
         except IndexError:
@@ -176,15 +184,13 @@ def main():
             logger.error(message)
         finally:
             if message:
-                # Отправляем сообщение.
-                send_message(bot, message)
+                try:
+                    # Отправляем сообщение.
+                    send_message(bot, message)
+                except Exception as error:
+                    logger.error(f'Сбой в работе программы: {error}')
         time.sleep(RETRY_PERIOD)
 
 
 if __name__ == '__main__':
     main()
-
-# Я сделал 2 варианта один под pytest
-# другой так чтобы обрабатывалось любое количество домашних работ
-# не стал костылями подгонять под pytest т.к. в реальной жизни тесты
-# пишуться под программу а не наоборот.
