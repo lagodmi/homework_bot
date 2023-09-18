@@ -11,6 +11,13 @@ class HTTPRequestError(Exception):
         self.response_body = response_body
         super().__init__(message)
 
+    def __str__(self):
+        """Выводим сообщение об ошибке и дополнительную информацию."""
+        return (f'{super().__str__()}\n',
+                f'Request URL: {self.request_url}\n',
+                f'Response Code: {self.response_code}\n',
+                f'Response Body: {self.response_body}')
+
 
 class SendMessageError(Exception):
     """Ошибка отправки сообщения."""
@@ -19,7 +26,7 @@ class SendMessageError(Exception):
 
 
 class RequestException(Exception):
-    """Ошибка при выполнении запроса к API"""
+    """Ошибка при выполнении запроса к API."""
 
     pass
 

@@ -37,11 +37,8 @@ file_handler.setFormatter(formatter)
 # добавляем обработчик к логгеру
 logger.addHandler(file_handler)
 
-# Создаем потоковый обработчик
-stream_handler = logging.StreamHandler()
-
 # Добавляем обработчик к логгеру модуля
-logger.addHandler(stream_handler)
+logger.addHandler(handler)
 
 PRACTICUM_TOKEN = os.getenv('practicum_token')
 TELEGRAM_TOKEN = os.getenv('token')
@@ -82,8 +79,10 @@ def get_api_answer(timestamp):
             headers=HEADERS,
             params={'from_date': timestamp}
         )
-    except requests.RequestException as exception:
-        raise RequestException('Ошибка при запроса к API: %s', str(exception))
+    except requests.RequestException as err:
+        raise RequestException(
+            'Ошибка при запроса к API: %s', str(err)
+        ) from err
     if response.status_code != HTTPStatus.OK:
         raise HTTPRequestError(
             'Статус ответа от Практикума не 200.',
@@ -97,43 +96,14 @@ def get_api_answer(timestamp):
 def check_response(response):
     """Проверяет ответ API на соответствие документации."""
     try:
-        homework = response.get('homeworks')
+        homework_list = response.get('homeworks')
     except Exception:
         raise TypeError('Ответ API не содержит ключа "homeworks"')
-    if not isinstance(homework, list):
+    if not isinstance(homework_list, list):
         raise TypeError('Неверный формат списка домашних заданий')
-    return homework
+    return homework_list
 
 
-def wrapper_parse_status(func):
-    """Обработка функции для pytest."""
-    def wrapper(homework_list):
-        """Извлекаем статусы из ответа с Практикума."""
-        # Костыль для pytest.
-        if isinstance(homework_list, dict):
-            return func(homework_list)
-        # Основная работа по проверке статуса.
-        if len(homework_list) < 2:
-            homevork = homework_list[0]
-            return func(homevork)
-        # Обработка если в ответе больше одной домашки.
-        message = ''
-        for homework_dict in homework_list:
-            try:
-                homework_name = homework_dict['homework_name']
-                status = homework_dict['status']
-                verdict = HOMEWORK_VERDICTS[status]
-            except KeyError as exception:
-                raise KeyError(f'Отсутствует ключ {exception} в ответе API.')
-            message += (
-                f'Изменился статус проверки работы "{homework_name}". '
-                f'{verdict}\n'
-            )
-        return message
-    return wrapper
-
-
-@wrapper_parse_status
 def parse_status(homework):
     """Извлекаем статус из ответа с Практикума."""
     if not isinstance(homework, dict):
@@ -148,12 +118,20 @@ def parse_status(homework):
     return message
 
 
+def generate_message(list_homework):
+    """Генерируем сообщение."""
+    message = ''
+    for homework in list_homework:
+        message += parse_status(homework)
+    return message
+
+
 def send_message(bot, message):
     """Отправляет в telegram сообщение."""
     try:
         bot.send_message(TELEGRAM_CHAT_ID, message)
-    except error.TelegramError as exception:
-        raise SendMessageError(f'Ошибка отправки сообщения: {exception}')
+    except error.TelegramError as err:
+        raise SendMessageError(f'Ошибка отправки сообщения: {err}') from err
     else:
         logger.debug('Сообщение о смене статуса отправлено.')
 
@@ -168,17 +146,13 @@ def main():
         try:
             # Получаем время предыдущего запроса.
             timestamp = read_time()
-            # Записываем время текущего запроса.
-            write_time()
             # Сохраняем ответ от эндпоинта.
             api_data = get_api_answer(timestamp)
             # Проверяем ответ на соответствие документации.
             homework_list = check_response(api_data)
             # Формируем сообщение.
-            message = parse_status(homework_list)
-        except IndexError:
-            # Отлавливаю ошибку пустого словаря переменной message.
-            logger.debug('Ответ АPI пуст. Бот работает в штатном режиме.')
+            message = generate_message(homework_list)
+            logger.debug('Бот работает в штатном режиме.')
         except Exception as error:
             message = f'Сбой в работе программы: {error}'
             # Отправляем сообщение.
@@ -189,7 +163,9 @@ def main():
                     # Отправляем сообщение.
                     send_message(bot, message)
                 except Exception as error:
-                    logger.error(f'Сбой в работе программы: {error}')
+                    logger.exception(f'Сбой в работе программы: {error}')
+        # Записываем время текущего запроса.
+        write_time()
         time.sleep(RETRY_PERIOD)
 
 
